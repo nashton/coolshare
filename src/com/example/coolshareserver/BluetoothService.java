@@ -48,7 +48,7 @@ public class BluetoothService extends Service {
     public static final int STATE_CONNECTING = 2; // now initiating an outgoing connection
     public static final int STATE_CONNECTED = 3;  // now connected to a remote device
 
-    // Commands for Cool-SHARE server
+    // Cool-SHARE Protocol constants
     public static final int BTSTORE_CMD_BYTES = 8;
     public static final int BTSTORE_DATALENGTH_BYTES = 4;
     public static final int BTSTORE_VARLENGTH_BYTES = 2;
@@ -58,10 +58,6 @@ public class BluetoothService extends Service {
     public static final String BTSTORE_CMD_RESPONSE_INFO = "res_info";
     public static final String BTSTORE_CMD_RESPONSE_DETAILS = "res_detl";
     public static final String BTSTORE_CMD_RESPONSE_APK = "res_apk_";
-    
-    // Protocol: Requests 8 byte cmd , [2 byte var length, x bytes var]
-    //			 Response 8 byte type, 4 byte data length, x bytes data 
-    
     
     @Override
     public void onCreate() {
@@ -205,30 +201,19 @@ public class BluetoothService extends Service {
 
         public void run() {
             Log.i(TAG, "BEGIN mConnectedThread");
-            byte[] buffer = new byte[1024];
-            int bytes;
+            byte[] buffer;
 
             // Keep listening to the InputStream while connected
             while (true) {
                 try {
                     // Read from the InputStream
-                    bytes = mmInStream.read(buffer);
-                    Log.e(TAG, "Read bytes: " + bytes);
-
-                    // Send the obtained bytes to the UI Activity
-                   // mHandler.obtainMessage(BluetoothChat.MESSAGE_READ, bytes, -1, buffer).sendToTarget();
-
-                    // Copy to new buffer of correct length	
-                    byte[] cmdBuffer = new byte[bytes];
-                    System.arraycopy(buffer, 0, cmdBuffer, 0, bytes);
-                    
-                    String cmd = new String(cmdBuffer);
+                    buffer = readBytesFromInputStream(mmInStream, BTSTORE_CMD_BYTES);
+                    String cmd = new String(buffer);
                     
                     if(D) Log.e(TAG, "Received cmd: " + cmd);
 
                     // Act on command
                     handleCommand(cmd);
-                    
                 } catch (IOException e) {
                     Log.e(TAG, "disconnected", e);
                     break;
@@ -244,23 +229,39 @@ public class BluetoothService extends Service {
 			if(cmd.equals(BTSTORE_CMD_REQUEST_INFO)) {
 				String sdcard = Environment.getExternalStorageDirectory().getPath();
 				String filePath = sdcard + "/cool-SHARE-server/info.xml";
-				sendFile(filePath);
+				sendFile(filePath, BTSTORE_CMD_RESPONSE_INFO);
 			} else if(cmd.equals(BTSTORE_CMD_REQUEST_DETAILS)) {
-				
+				String sdcard = Environment.getExternalStorageDirectory().getPath();
+				String filePath = sdcard + "/cool-SHARE-server/details.xml";
+				sendFile(filePath, BTSTORE_CMD_RESPONSE_DETAILS);				
 			} else if(cmd.startsWith(BTSTORE_CMD_REQUEST_APK)) {
-				Handle apk name variable length in reading stream ...
+				// Get APK name length
+				byte[] nameLengthBuffer = readBytesFromInputStream(mmInStream, BTSTORE_VARLENGTH_BYTES);
+				int nameLength = ByteBuffer.wrap(nameLengthBuffer).getShort();
+				
+				// Get APK name
+				byte[] nameBuffer = readBytesFromInputStream(mmInStream, nameLength);
+				String name = new String(nameBuffer);
+				
+				// Send the requested APK
+				String sdcard = Environment.getExternalStorageDirectory().getPath();
+				String filePath = sdcard + "/cool-SHARE-server/" + name;
+				sendFile(filePath, BTSTORE_CMD_RESPONSE_APK);
 			} else {
 				if(D) Log.e(TAG, "Unknown command received: " + cmd);
 				
 			}
 		}
 
-		private void sendFile(String path) throws FileNotFoundException, IOException {
+		private void sendFile(String path, String responseType) throws FileNotFoundException, IOException {
 			byte[] fileBuffer = new byte[1024];
 			File file = new File(path);
 			if(file.length() > Integer.MAX_VALUE ) {
 				throw new IOException("File is too big (" + Long.toString(file.length()) + "");
 			}
+			
+			// Write reply command to stream
+			mmOutStream.write(responseType.getBytes());
 			
 			// Write file size to stream
 			ByteBuffer lengthBuffer = ByteBuffer.allocate(BTSTORE_DATALENGTH_BYTES).putInt((int)file.length());
@@ -269,10 +270,11 @@ public class BluetoothService extends Service {
 			// Write file to stream
 			InputStream in = null;
 			try {
+				int read = 0;
 				in = new BufferedInputStream(new FileInputStream(file));
 				
-				while(in.read(fileBuffer) != -1) {
-					mmOutStream.write(fileBuffer);
+				while( (read = in.read(fileBuffer)) != -1) {
+					mmOutStream.write(fileBuffer, 0, read);
 				}
 				mmOutStream.flush();
 			} finally {
@@ -307,4 +309,26 @@ public class BluetoothService extends Service {
         }
     }
 
+    /**
+     * Reads a specific number of bytes from stream, no more no less. Otherwise exception is thrown
+     * 
+     * @param stream
+     * @param toRead
+     * @return
+     * @throws IOException
+     */
+    private static byte[] readBytesFromInputStream(InputStream stream, int toRead) throws IOException {
+    	int read = 0;
+    	int offset = 0;
+    	byte[] buffer = new byte[toRead];
+
+    	while(toRead > 0 && (read = stream.read(buffer, offset, toRead)) > 0) {
+    		toRead -= read;
+    		offset += read;
+    	}
+    	
+    	if(toRead > 0) throw new IOException("Could not read specified number of bytes from stream.");
+
+    	return buffer;
+    }
 }
