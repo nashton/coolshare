@@ -9,20 +9,22 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
-import java.util.Arrays;
 import java.util.UUID;
 
-import android.R.integer;
+import com.example.coolshareserver2.R;
+
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothServerSocket;
 import android.bluetooth.BluetoothSocket;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Environment;
-import android.os.Handler;
 import android.os.IBinder;
-import android.provider.MediaStore.Files;
+import android.support.v4.app.NotificationCompat;
+import android.support.v4.app.TaskStackBuilder;
 import android.util.Log;
 
 public class BluetoothService extends Service {
@@ -34,14 +36,10 @@ public class BluetoothService extends Service {
 	
 	private AcceptThread mAcceptThread = null;
     private ConnectedThread mConnectedThread = null;
-    private final Handler mHandler = null;
 
 	// Unique UUID for this application
     private static final UUID MY_UUID = UUID.fromString("fa87c0d0-afac-11de-8a39-0800200c9a66");
- 
-    // Current connection state
-    private int mState;
-    
+
     // Constants that indicate the current connection state
     public static final int STATE_NONE = 0;       // we're doing nothing
     public static final int STATE_LISTEN = 1;     // now listening for incoming connections
@@ -49,22 +47,46 @@ public class BluetoothService extends Service {
     public static final int STATE_CONNECTED = 3;  // now connected to a remote device
 
     // Cool-SHARE Protocol constants
-    public static final int BTSTORE_CMD_BYTES = 8;
-    public static final int BTSTORE_DATALENGTH_BYTES = 4;
-    public static final int BTSTORE_VARLENGTH_BYTES = 2;
-    public static final String BTSTORE_CMD_REQUEST_INFO = "req_info";
-    public static final String BTSTORE_CMD_REQUEST_DETAILS = "req_detl";
-    public static final String BTSTORE_CMD_REQUEST_APK = "req_apk_";
-    public static final String BTSTORE_CMD_RESPONSE_INFO = "res_info";
-    public static final String BTSTORE_CMD_RESPONSE_DETAILS = "res_detl";
-    public static final String BTSTORE_CMD_RESPONSE_APK = "res_apk_";
+    public static final int COM_CMD_BYTES = 1;
+    public static final int COM_DATALENGTH_BYTES = 4;
+    public static final int COM_VARLENGTH_BYTES = 2;
+    public static final int CMD_REQUEST_INFO = 1;
+    public static final int CMD_REQUEST_DETAILS = 2;
+    public static final int CMD_REQUEST_APK = 3;
+    public static final int CMD_RESPONSE_INFO = 4;
+    public static final int CMD_RESPONSE_DETAILS = 5;
+    public static final int CMD_RESPONSE_APK = 6;
+    
+    private static final int NOTIFICATION_ID = 0;
+    private NotificationCompat.Builder nBuilder;
+    private NotificationManager nManager;
     
     @Override
     public void onCreate() {
         if (D) Log.d(TAG, "onCreate");
 
     	mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-        mState = STATE_NONE;
+    	
+    	nBuilder =
+                new NotificationCompat.Builder(this)
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle("CoolSHARE Server")
+                .setContentText("Server started");
+        nManager =
+        	    (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+
+        	TaskStackBuilder stackBuilder = TaskStackBuilder.create(this);
+        	Intent resultIntent = new Intent(this, ServerActivity.class);
+        	stackBuilder.addParentStack(ServerActivity.class);
+        	stackBuilder.addNextIntent(resultIntent);
+        	
+        	PendingIntent resultPendingIntent =
+        	        stackBuilder.getPendingIntent(
+        	            0,
+        	            PendingIntent.FLAG_UPDATE_CURRENT
+        	        );
+        	nBuilder.setContentIntent(resultPendingIntent);
+        	nManager.notify(NOTIFICATION_ID, nBuilder.build());
     }
     
     @Override
@@ -72,6 +94,7 @@ public class BluetoothService extends Service {
         // The service is starting, due to a call to startService()
         if (D) Log.d(TAG, "onStartCommand");
 
+        
         // If the adapter is null, then Bluetooth is not supported
         if (mBluetoothAdapter == null) {
             if (D) Log.d(TAG, "Bluetooth not available");
@@ -101,8 +124,8 @@ public class BluetoothService extends Service {
         if (D) Log.d(TAG, "onDestroy");
         
     	// Cancel any threads currently running
+       	if (mAcceptThread != null) {mAcceptThread.cancel(); mAcceptThread = null;}
     	if (mConnectedThread != null) {mConnectedThread.cancel(); mConnectedThread = null;}
-    	if (mAcceptThread != null) {mAcceptThread.cancel(); mAcceptThread = null;}
     }
     
 	@Override
@@ -135,6 +158,8 @@ public class BluetoothService extends Service {
             if (D) Log.d(TAG, "BEGIN mAcceptThread" + this);
             setName("AcceptThread");
             BluetoothSocket socket = null;
+            
+            updateNotification("Listening...");
             
 	        // Keep listening until exception occurs or a socket is returned
 	        while (mmServerSocket != null) {
@@ -201,15 +226,15 @@ public class BluetoothService extends Service {
 
         public void run() {
             Log.i(TAG, "BEGIN mConnectedThread");
-            byte[] buffer;
-
+            
+            updateNotification("Connected to " + mmSocket.getRemoteDevice().getName());
+            
             // Keep listening to the InputStream while connected
             while (true) {
                 try {
                     // Read from the InputStream
-                    buffer = readBytesFromInputStream(mmInStream, BTSTORE_CMD_BYTES);
-                    String cmd = new String(buffer);
-                    
+                	int cmd = mmInStream.read();
+
                     if(D) Log.e(TAG, "Received cmd: " + cmd);
 
                     // Act on command
@@ -219,24 +244,32 @@ public class BluetoothService extends Service {
                     break;
                 }
             }
+            
+            updateNotification("Disconnected...");
+            
             // Restart listening
             if(mAcceptThread != null) {
-            	mAcceptThread.start();
+            	mAcceptThread.cancel();
+            	mAcceptThread = new AcceptThread();
+        		mAcceptThread.start();
             }
         }
 
-		private void handleCommand(String cmd) throws FileNotFoundException, IOException {
-			if(cmd.equals(BTSTORE_CMD_REQUEST_INFO)) {
-				String sdcard = Environment.getExternalStorageDirectory().getPath();
-				String filePath = sdcard + "/cool-SHARE-server/info.xml";
-				sendFile(filePath, BTSTORE_CMD_RESPONSE_INFO);
-			} else if(cmd.equals(BTSTORE_CMD_REQUEST_DETAILS)) {
-				String sdcard = Environment.getExternalStorageDirectory().getPath();
-				String filePath = sdcard + "/cool-SHARE-server/details.xml";
-				sendFile(filePath, BTSTORE_CMD_RESPONSE_DETAILS);				
-			} else if(cmd.startsWith(BTSTORE_CMD_REQUEST_APK)) {
+		private void handleCommand(int cmd) throws FileNotFoundException, IOException {
+			String sdcard = Environment.getExternalStorageDirectory().getPath();
+			String filePath = "";
+			switch(cmd) {
+			case CMD_REQUEST_INFO:
+				filePath = sdcard + "/cool-SHARE-server/info.xml";
+				sendFile(filePath, CMD_RESPONSE_INFO);
+				break;
+			case CMD_REQUEST_DETAILS:
+				filePath = sdcard + "/cool-SHARE-server/details.xml";
+				sendFile(filePath, CMD_RESPONSE_DETAILS);
+				break;
+			case CMD_REQUEST_APK:
 				// Get APK name length
-				byte[] nameLengthBuffer = readBytesFromInputStream(mmInStream, BTSTORE_VARLENGTH_BYTES);
+				byte[] nameLengthBuffer = readBytesFromInputStream(mmInStream, COM_VARLENGTH_BYTES);
 				int nameLength = ByteBuffer.wrap(nameLengthBuffer).getShort();
 				
 				// Get APK name
@@ -244,16 +277,15 @@ public class BluetoothService extends Service {
 				String name = new String(nameBuffer);
 				
 				// Send the requested APK
-				String sdcard = Environment.getExternalStorageDirectory().getPath();
-				String filePath = sdcard + "/cool-SHARE-server/" + name;
-				sendFile(filePath, BTSTORE_CMD_RESPONSE_APK);
-			} else {
+				filePath = sdcard + "/cool-SHARE-server/" + name;
+				sendFile(filePath, CMD_RESPONSE_APK);
+				break;
+			default:
 				if(D) Log.e(TAG, "Unknown command received: " + cmd);
-				
 			}
 		}
 
-		private void sendFile(String path, String responseType) throws FileNotFoundException, IOException {
+		private void sendFile(String path, int responseType) throws FileNotFoundException, IOException {
 			byte[] fileBuffer = new byte[1024];
 			File file = new File(path);
 			if(file.length() > Integer.MAX_VALUE ) {
@@ -261,10 +293,10 @@ public class BluetoothService extends Service {
 			}
 			
 			// Write reply command to stream
-			mmOutStream.write(responseType.getBytes());
+			mmOutStream.write(responseType);
 			
 			// Write file size to stream
-			ByteBuffer lengthBuffer = ByteBuffer.allocate(BTSTORE_DATALENGTH_BYTES).putInt((int)file.length());
+			ByteBuffer lengthBuffer = ByteBuffer.allocate(COM_DATALENGTH_BYTES).putInt((int)file.length());
 			mmOutStream.write(lengthBuffer.array());
 			
 			// Write file to stream
@@ -309,6 +341,11 @@ public class BluetoothService extends Service {
         }
     }
 
+	private void updateNotification(String message) {
+		nBuilder.setContentText(message);
+        nManager.notify(NOTIFICATION_ID, nBuilder.build());
+	}
+	
     /**
      * Reads a specific number of bytes from stream, no more no less. Otherwise exception is thrown
      * 
