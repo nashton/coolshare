@@ -4,5 +4,10 @@
     <string name="app_name">CoolShareServer2</string>
     <string name="action_settings">Settings</string>
     <string name="hello_world">Hello world!</string>
-
+    <string name="pref_sharing">App Sharing Settings</string>
+    <string name="pref_title_share_all">Share all your apps</string>
+    <string name="pref_share_all">This will share all installed apps</string>
+    <string name="pref_title_share_select">Select apps to share</string>
+    <string name="pref_title_share_selected">Share selected apps</string>
+    
 </resources>

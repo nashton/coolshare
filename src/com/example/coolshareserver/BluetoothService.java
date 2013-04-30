@@ -11,6 +11,7 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.UUID;
 
+import com.example.coolshareserver.activities.ServerActivity;
 import com.example.coolshareserver2.R;
 
 import android.app.NotificationManager;
@@ -21,17 +22,19 @@ import android.bluetooth.BluetoothServerSocket;
 import android.bluetooth.BluetoothSocket;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Environment;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.os.IBinder;
+import android.preference.PreferenceManager;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.app.TaskStackBuilder;
 import android.util.Log;
 
 public class BluetoothService extends Service {
-	
     // Debugging
     private static final String TAG = "CoolShareService";
     private static final boolean D = true;
+    
 	private BluetoothAdapter mBluetoothAdapter = null;
 	
 	private AcceptThread mAcceptThread = null;
@@ -40,6 +43,9 @@ public class BluetoothService extends Service {
 	// Unique UUID for this application
     private static final UUID MY_UUID = UUID.fromString("fa87c0d0-afac-11de-8a39-0800200c9a66");
 
+    public static final String FILEPATH_INFO = "info.xml";
+    public static final String FILEPATH_DETAILS = "details.xml";
+    
     // Constants that indicate the current connection state
     public static final int STATE_NONE = 0;       // we're doing nothing
     public static final int STATE_LISTEN = 1;     // now listening for incoming connections
@@ -56,6 +62,7 @@ public class BluetoothService extends Service {
     public static final int CMD_RESPONSE_INFO = 4;
     public static final int CMD_RESPONSE_DETAILS = 5;
     public static final int CMD_RESPONSE_APK = 6;
+    public static final int CMD_RESPONSE_NOT_SHARED = 7;
     
     private static final int NOTIFICATION_ID = 0;
     private NotificationCompat.Builder nBuilder;
@@ -65,6 +72,8 @@ public class BluetoothService extends Service {
     public void onCreate() {
         if (D) Log.d(TAG, "onCreate");
 
+    	PreferenceManager.setDefaultValues(this, R.xml.preferences, false);
+    	
     	mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
     	
     	nBuilder =
@@ -202,7 +211,7 @@ public class BluetoothService extends Service {
      * It restarts the acceptThread when connection is dropped
      */
     private class ConnectedThread extends Thread {
-        private final BluetoothSocket mmSocket;
+		private final BluetoothSocket mmSocket;
         private final BufferedInputStream mmInStream;
         private final BufferedOutputStream mmOutStream;
 
@@ -256,15 +265,15 @@ public class BluetoothService extends Service {
         }
 
 		private void handleCommand(int cmd) throws FileNotFoundException, IOException {
-			String sdcard = Environment.getExternalStorageDirectory().getPath();
-			String filePath = "";
+			String filePath;
+			String basePath = BluetoothService.this.getFilesDir().getAbsolutePath() + "/";
 			switch(cmd) {
 			case CMD_REQUEST_INFO:
-				filePath = sdcard + "/cool-SHARE-server/info.xml";
+				filePath = basePath + FILEPATH_INFO;
 				sendFile(filePath, CMD_RESPONSE_INFO);
 				break;
 			case CMD_REQUEST_DETAILS:
-				filePath = sdcard + "/cool-SHARE-server/details.xml";
+				filePath = basePath + FILEPATH_DETAILS;
 				sendFile(filePath, CMD_RESPONSE_DETAILS);
 				break;
 			case CMD_REQUEST_APK:
@@ -276,15 +285,39 @@ public class BluetoothService extends Service {
 				byte[] nameBuffer = readBytesFromInputStream(mmInStream, nameLength);
 				String name = new String(nameBuffer);
 				
-				// Send the requested APK
-				filePath = sdcard + "/cool-SHARE-server/" + name;
-				sendFile(filePath, CMD_RESPONSE_APK);
+				if(RepositoryUtils.isAppShared(name, BluetoothService.this)) {
+					// Send the requested APK 
+					PackageInfo info;
+					try {
+						info = getPackageManager().getPackageInfo(name, 0);
+						filePath = info.applicationInfo.publicSourceDir;
+						sendFile(filePath, CMD_RESPONSE_APK);
+					} catch (NameNotFoundException e) {
+						// TODO Auto-generated catch block
+						e.printStackTrace();
+					}
+				} else {
+					sendNotShared();
+				}
+
 				break;
 			default:
 				if(D) Log.e(TAG, "Unknown command received: " + cmd);
 			}
 		}
 
+		private void sendNotShared() {
+			// Write reply command to stream
+			try {
+				mmOutStream.write(CMD_RESPONSE_NOT_SHARED);
+				mmOutStream.flush();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			
+		}
+		
 		private void sendFile(String path, int responseType) throws FileNotFoundException, IOException {
 			byte[] fileBuffer = new byte[1024];
 			File file = new File(path);
@@ -315,22 +348,6 @@ public class BluetoothService extends Service {
 				}
 			}
 		}
-
-        /**
-         * Write to the connected OutStream.
-         * @param buffer  The bytes to write
-         */
-        public void write(byte[] buffer) {
-            try {
-                mmOutStream.write(buffer);
-
-                // Share the sent message back to the UI Activity
-                //mHandler.obtainMessage(BluetoothService.MESSAGE_WRITE, -1, -1, buffer)
-                //        .sendToTarget();
-            } catch (IOException e) {
-                Log.e(TAG, "Exception during write", e);
-            }
-        }
 
         public void cancel() {
             try {

@@ -32,4 +32,13 @@
         android:layout_marginRight="56dp"
         android:text="Stop Server" />
 
+    <RadioGroup
+        android:id="@+id/radioGroupShareOptions"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignLeft="@+id/buttonStartServer"
+        android:layout_below="@+id/buttonStartServer"
+        android:layout_marginTop="28dp" >
+    </RadioGroup>
+
 </RelativeLayout>

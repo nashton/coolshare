@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <PreferenceCategory 
+        android:title="@string/pref_sharing"
+        android:key="pref_key_sharing_settings">
+        <CheckBoxPreference
+            android:key="pref_key_share_all"
+            android:summary="@string/pref_share_all"
+            android:title="@string/pref_title_share_all"
+            android:defaultValue="true" />
+        <com.example.coolshareserver.MultiSelectListPreference 
+	        android:dialogTitle="@string/pref_title_share_select"
+	        android:key="pref_key_share_selected"
+	        android:summary=""        
+	        android:title="@string/pref_title_share_selected"
+	        android:entries="@array/empty_array"
+	        android:entryValues="@array/empty_array"
+	        android:defaultValue="@array/empty_array" />
+    </PreferenceCategory>
+    
+</PreferenceScreen>
